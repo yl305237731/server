@@ -31,6 +31,7 @@ import docker
 import os.path
 import multiprocessing
 import pathlib
+import platform
 import shutil
 import subprocess
 import sys
@@ -171,11 +172,22 @@ def cmake(cwd, args):
 
 def makeinstall(cwd, target='install'):
     log_verbose('make {}'.format(target))
-    verbose_flag = 'VERBOSE=1' if FLAGS.verbose else 'VERBOSE=0'
-    p = subprocess.Popen(
-        ['make', '-j',
-         str(FLAGS.build_parallel), verbose_flag, target],
-        cwd=cwd)
+
+    if platform.system() == 'Windows':
+        verbose_flag = '-v:detailed' if FLAGS.verbose else '-v:normal'
+        buildtype_flag = '-p:Configuration={}'.format(FLAGS.build_type)
+        p = subprocess.Popen([
+            'msbuild.exe', '-m:{}'.format(str(FLAGS.build_parallel)),
+            verbose_flag, buildtype_flag, '{}.vcxproj'.format(target)
+        ],
+                             cwd=cwd)
+    else:
+        verbose_flag = 'VERBOSE=1' if FLAGS.verbose else 'VERBOSE=0'
+        p = subprocess.Popen(
+            ['make', '-j',
+             str(FLAGS.build_parallel), verbose_flag, target],
+            cwd=cwd)
+
     p.wait()
     fail_if(p.returncode != 0, 'make {} failed'.format(target))
 
@@ -242,7 +254,17 @@ def core_cmake_args(components, backends, install_dir):
                 fail('unknown core backend {}'.format(be))
 
     cargs.append('-DTRITON_EXTRA_LIB_PATHS=/opt/tritonserver/lib')
-    cargs.append('/workspace/build')
+
+    # If TRITONBUILD_* is defined in the env then we use it to set
+    # corresponding cmake value.
+    for evar, eval in os.environ.items():
+        if evar.startswith('TRITONBUILD_'):
+            cargs.append('-D{}={}'.format(evar[len('TRITONBUILD_'):], eval))
+
+    if platform.system() == 'Windows':
+        cargs.append('c:/workspace/build')
+    else:
+        cargs.append('/workspace/build')
     return cargs
 
 
@@ -280,6 +302,12 @@ def backend_cmake_args(images, components, be, install_dir):
 
     cargs.append('-DTRITON_ENABLE_GPU:BOOL={}'.format(
         cmake_enable(FLAGS.enable_gpu)))
+
+    # If TRITONBUILD_* is defined in the env then we use it to set
+    # corresponding cmake value.
+    for evar, eval in os.environ.items():
+        if evar.startswith('TRITONBUILD_'):
+            cargs.append('-D{}={}'.format(evar[len('TRITONBUILD_'):], eval))
 
     cargs.append('..')
     return cargs
@@ -476,7 +504,38 @@ FROM ${BASE_IMAGE}
 
 ARG TRITON_VERSION
 ARG TRITON_CONTAINER_VERSION
+'''
+    # Install the windows- or linux-specific buildbase dependencies
+    if platform.system() == 'Windows':
+        df += '''
+SHELL ["cmd", "/S", "/C"]
 
+# Download and install Build Tools for Visual Studio
+RUN mkdir c:\\tmp
+ADD https://aka.ms/vs/16/release/vs_buildtools.exe /tmp/vs_buildtools.exe
+ADD https://aka.ms/vs/16/release/channel /tmp/VisualStudio.chman
+RUN /tmp/vs_buildtools.exe --quiet --wait --norestart --nocache --installPath C:\\BuildTools --channelUri C:\\tmp\\VisualStudio.chman --installChannelUri C:\\tmp\\VisualStudio.chman --add Microsoft.VisualStudio.Workload.VCTools;includeRecommended --add Microsoft.Component.MSBuild || IF "%ERRORLEVEL%"=="3010" EXIT 0
+
+# Specific cmake version is needed to avoid find_package(zlib) failure
+# when building grpc
+RUN powershell.exe -ExecutionPolicy RemoteSigned iex (new-object net.webclient).downloadstring('https://get.scoop.sh')
+RUN scoop install python git docker
+RUN scoop install cmake@3.18.2
+RUN cmake -version
+
+WORKDIR /vcpkg
+RUN git clone --depth=1 --single-branch -b 2020.11-1 https://github.com/microsoft/vcpkg.git
+WORKDIR /vcpkg/vcpkg
+RUN bootstrap-vcpkg.bat
+RUN vcpkg.exe update
+RUN vcpkg.exe install openssl:x64-windows openssl-windows:x64-windows rapidjson:x64-windows re2:x64-windows boost-interprocess:x64-windows zlib:x64-windows
+RUN vcpkg.exe integrate install
+
+WORKDIR /workspace
+RUN pip3 install --upgrade wheel setuptools docker
+'''
+    else:
+        df += '''
 # libcurl4-openSSL-dev is needed for GCS
 # python3-dev is needed by Torchvision
 # python3-pip is needed by python backend
@@ -618,11 +677,35 @@ RUN cd /opt/tritonserver/backends/onnxruntime && \
         patchelf --set-rpath '$ORIGIN' $i; \
     done
 '''
-    df += '''
+
+    # Copy in the triton source. We remove existing contents first
+    # incase the FROM container has something there already. On
+    # windows it is important that the entrypoint initialize
+    # VisualStudio environment otherwise the build will fail. Also set
+    # TRITONBUILD_CMAKE_TOOLCHAIN_FILE, VCPKG_TARGET_TRIPLET,
+    # TRITONBUILD_ZLIB_ROOT and TRITONBUILD_OPENSSL_ROOT_DIR within
+    # the build container so that later when we run cmake that we can
+    # point to the packages installed by vcpkg.
+    if platform.system() == 'Windows':
+        df += '''
+WORKDIR /workspace
+RUN rmdir /S/Q * || exit 0
+COPY . .
+
+ENV TRITONBUILD_CMAKE_TOOLCHAIN_FILE /vcpkg/vcpkg/scripts/buildsystems/vcpkg.cmake
+ENV TRITONBUILD_VCPKG_TARGET_TRIPLET x64-windows
+ENV TRITONBUILD_OPENSSL_ROOT_DIR /vcpkg/vcpkg/installed/x64-windows
+ENV TRITONBUILD_ZLIB_ROOT /vcpkg/vcpkg/installed/x64-windows
+ENTRYPOINT C:\BuildTools\Common7\Tools\VsDevCmd.bat &&
+'''
+    else:
+        df += '''
 WORKDIR /workspace
 RUN rm -fr *
 COPY . .
+ENTRYPOINT []
 '''
+
     if 'onnxruntime' in backends:
         df += '''
 # Copy ONNX custom op library and model (Needed for testing)
@@ -632,7 +715,6 @@ COPY --from=tritonserver_onnx /workspace/build/Release/testdata/custom_op_librar
     /workspace/qa/L0_custom_ops/
 '''
     df += '''
-ENTRYPOINT []
 ENV TRITON_SERVER_VERSION ${TRITON_VERSION}
 ENV NVIDIA_TRITON_SERVER_VERSION ${TRITON_CONTAINER_VERSION}
 '''
@@ -785,6 +867,8 @@ def container_build(backends, images):
     # build.
     if 'base' in images:
         base_image = images['base']
+    elif platform.system() == 'Windows':
+        base_image = 'mcr.microsoft.com/dotnet/framework/sdk:4.8'
     else:
         base_image = 'nvcr.io/nvidia/tritonserver:{}-py3-min'.format(
             FLAGS.upstream_container_version)
@@ -894,8 +978,14 @@ def container_build(backends, images):
         # --install-dir is added/overridden to 'install_dir'
         #
         # --container-prebuild-command needs to be quoted correctly
-        runargs = sys.argv[1:]
-        runargs.append('--no-container-build')
+        runargs = [
+            'python3',
+            './build.py',
+        ]
+        runargs += sys.argv[1:]
+        runargs += [
+            '--no-container-build',
+        ]
         if FLAGS.version is not None:
             runargs += ['--version', FLAGS.version]
         if FLAGS.container_version is not None:
@@ -915,25 +1005,27 @@ def container_build(backends, images):
                 runargs[idx] = '--container-prebuild-command="{}"'.format(
                     runargs[idx][len('--container-prebuild-command='):])
 
-        log_verbose('run {}'.format(runargs))
-        container = client.containers.run(
+        dockerrunargs = [
+            'docker', 'run', '--name', 'tritonserver_builder', '-w',
+            '/workspace'
+        ]
+        if platform.system() == 'Windows':
+            dockerrunargs += [
+                '-v', '\\\\.\pipe\docker_engine:\\\\.\pipe\docker_engine'
+            ]
+        else:
+            dockerrunargs += ['-v', '/var/run/docker.sock:/var/run/docker.sock']
+        dockerrunargs += [
             'tritonserver_buildbase',
-            './build.py {}'.format(' '.join(runargs)),
-            detach=True,
-            name='tritonserver_builder',
-            volumes={
-                '/var/run/docker.sock': {
-                    'bind': '/var/run/docker.sock',
-                    'mode': 'rw'
-                }
-            },
-            working_dir='/workspace')
-        if FLAGS.verbose:
-            for ln in container.logs(stream=True):
-                log_verbose(ln)
-        ret = container.wait()
-        fail_if(ret['StatusCode'] != 0,
-                'tritonserver_builder failed: {}'.format(ret))
+        ]
+        dockerrunargs += runargs
+
+        log_verbose(dockerrunargs)
+        p = subprocess.Popen(dockerrunargs)
+        p.wait()
+        fail_if(p.returncode != 0, 'docker run tritonserver_builder failed')
+
+        container = client.containers.get('tritonserver_builder')
 
         # It is possible to copy the install artifacts from the
         # container at this point (and, for example put them in the
@@ -1129,7 +1221,6 @@ if __name__ == '__main__':
         help='Minimum CUDA compute capability supported by server.')
 
     parser.add_argument(
-        '-e',
         '--endpoint',
         action='append',
         required=False,
@@ -1144,7 +1235,6 @@ if __name__ == '__main__':
         'Include specified filesystem in build. Allowed values are "gcs", "azure_storage" and "s3".'
     )
     parser.add_argument(
-        '-b',
         '--backend',
         action='append',
         required=False,
@@ -1152,7 +1242,6 @@ if __name__ == '__main__':
         'Include specified backend in build as <backend-name>[:<repo-tag>]. If <repo-tag> starts with "pull/" then it refers to a pull-request reference, otherwise <repo-tag> indicates the git tag/branch to use for the build, default is "main".'
     )
     parser.add_argument(
-        '-r',
         '--repo-tag',
         action='append',
         required=False,
