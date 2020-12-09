@@ -511,7 +511,7 @@ ARG TRITON_CONTAINER_VERSION
 SHELL ["cmd", "/S", "/C"]
 
 # Download and install Build Tools for Visual Studio
-RUN mkdir c:\\tmp
+RUN if not exist "c:\\tmp\\" mkdir c:\\tmp
 ADD https://aka.ms/vs/16/release/vs_buildtools.exe /tmp/vs_buildtools.exe
 ADD https://aka.ms/vs/16/release/channel /tmp/VisualStudio.chman
 RUN /tmp/vs_buildtools.exe --quiet --wait --norestart --nocache --installPath C:\\BuildTools --channelUri C:\\tmp\\VisualStudio.chman --installChannelUri C:\\tmp\\VisualStudio.chman --add Microsoft.VisualStudio.Workload.VCTools;includeRecommended --add Microsoft.Component.MSBuild || IF "%ERRORLEVEL%"=="3010" EXIT 0
@@ -910,9 +910,11 @@ def container_build(backends, images):
 
     cachefromargs = ['--cache-from={}'.format(k) for k in cachefrommap]
     commonargs = [
-        'docker', 'build', '--pull', '-f',
+        'docker', 'build', '-f',
         os.path.join(FLAGS.build_dir, 'Dockerfile.buildbase')
     ]
+    if not FLAGS.no_container_pull:
+        commonargs += ['--pull',]
 
     log_verbose('buildbase container {}'.format(commonargs + cachefromargs))
     create_dockerfile_buildbase(FLAGS.build_dir, 'Dockerfile.buildbase',
@@ -1099,6 +1101,10 @@ if __name__ == '__main__':
                         action="store_true",
                         required=False,
                         help='Do not use Docker container for build.')
+    parser.add_argument('--no-container-pull',
+                        action="store_true",
+                        required=False,
+                        help='Do not use Docker --pull argument when building container.')
 
     parser.add_argument('--build-id',
                         type=str,
