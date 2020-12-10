@@ -245,7 +245,7 @@ def core_cmake_args(components, backends, install_dir):
                 be.upper(), cmake_enable(be in backends)))
         if (be in CORE_BACKENDS) and (be in backends):
             if be == 'tensorrt':
-                pass
+                cargs.append(tensorrt_cmake_args())
             elif be == 'custom':
                 pass
             elif be == 'ensemble':
@@ -327,6 +327,15 @@ def onnxruntime_cmake_args():
         '-DTRITON_ONNXRUNTIME_INCLUDE_PATHS=/opt/tritonserver/include/onnxruntime',
         '-DTRITON_ONNXRUNTIME_LIB_PATHS=/opt/tritonserver/backends/onnxruntime'
     ]
+
+
+def tensorrt_cmake_args():
+    if platform.system() == 'Windows':
+        return [
+            '-DTRITON_TENSORRT_INCLUDE_PATHS=c:/TensorRT/include',
+        ]
+
+    return []
 
 
 def tensorflow_cmake_args(ver, images):
