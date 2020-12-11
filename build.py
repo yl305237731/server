@@ -245,7 +245,7 @@ def core_cmake_args(components, backends, install_dir):
                 be.upper(), cmake_enable(be in backends)))
         if (be in CORE_BACKENDS) and (be in backends):
             if be == 'tensorrt':
-                cargs.append(tensorrt_cmake_args())
+                cargs += tensorrt_cmake_args()
             elif be == 'custom':
                 pass
             elif be == 'ensemble':
