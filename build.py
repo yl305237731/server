@@ -519,9 +519,8 @@ ARG TRITON_CONTAINER_VERSION
         df += '''
 SHELL ["cmd", "/S", "/C"]
 
-# Download and install Build Tools for Visual Studio.  Use 16.3.1 as
-# that is known to work and more recent releases are known not to
-# work. https://docs.microsoft.com/en-us/visualstudio/releases/2019/history
+# Download and install Build Tools for Visual Studio.  Use 16.8.3
+# explicitly. https://docs.microsoft.com/en-us/visualstudio/releases/2019/history
 RUN if not exist "c:\\tmp\\" mkdir c:\\tmp
 ADD https://download.visualstudio.microsoft.com/download/pr/9b3476ff-6d0a-4ff8-956d-270147f21cd4/0df5becfebf4ae2418f5fae653feebf3888b0af00d3df0415cb64875147e9be3/vs_BuildTools.exe /tmp/vs_buildtools.exe
 ADD https://aka.ms/vs/16/release/channel /tmp/VisualStudio.chman

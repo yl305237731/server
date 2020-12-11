@@ -143,13 +143,6 @@ if (OPENSSL_ROOT_DIR)
   set(_CMAKE_ARGS_OPENSSL_ROOT_DIR "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}")
 endif()
 
-# If ZLIB_ROOT is set, propagate that hint path to the external
-# projects with ZLib dependency.
-set(_CMAKE_ARGS_ZLIB_ROOT "")
-if (ZLIB_ROOT)
-  set(_CMAKE_ARGS_ZLIB_ROOT "-DZLIB_ROOT:PATH=${ZLIB_ROOT}")
-endif()
-
 #
 # Get the protobuf and grpc source
 #
@@ -244,7 +237,6 @@ ExternalProject_Add(grpc
     -Dc-ares_DIR:PATH=${CMAKE_CURRENT_BINARY_DIR}/c-ares/lib/cmake/c-ares
     -DgRPC_SSL_PROVIDER:STRING=package
     ${_CMAKE_ARGS_OPENSSL_ROOT_DIR}
-    ${_CMAKE_ARGS_ZLIB_ROOT}
     ${_CMAKE_ARGS_CMAKE_TOOLCHAIN_FILE}
     ${_CMAKE_ARGS_VCPKG_TARGET_TRIPLET}
     -DCMAKE_BUILD_TYPE:STRING=${CMAKE_BUILD_TYPE}
