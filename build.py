@@ -924,7 +924,9 @@ def container_build(backends, images):
         os.path.join(FLAGS.build_dir, 'Dockerfile.buildbase')
     ]
     if not FLAGS.no_container_pull:
-        commonargs += ['--pull',]
+        commonargs += [
+            '--pull',
+        ]
 
     log_verbose('buildbase container {}'.format(commonargs + cachefromargs))
     create_dockerfile_buildbase(FLAGS.build_dir, 'Dockerfile.buildbase',
@@ -1077,15 +1079,18 @@ def container_build(backends, images):
         fail_if(p.returncode != 0, 'docker build tritonserver_build failed')
 
         # Final base image... this is a multi-stage build that uses
-        # the install artifacts from the tritonserver_build container.
-        create_dockerfile(FLAGS.build_dir, 'Dockerfile', dockerfileargmap,
-                          backends)
-        p = subprocess.Popen([
-            'docker', 'build', '-f',
-            os.path.join(FLAGS.build_dir, 'Dockerfile')
-        ] + ['-t', 'tritonserver', '.'])
-        p.wait()
-        fail_if(p.returncode != 0, 'docker build tritonserver failed')
+        # the install artifacts from the tritonserver_build
+        # container. Windows containers can't access GPUs so we don't
+        # bother to create the base image for windows.
+        if platform.system() != 'Windows':
+            create_dockerfile(FLAGS.build_dir, 'Dockerfile', dockerfileargmap,
+                              backends)
+            p = subprocess.Popen([
+                'docker', 'build', '-f',
+                os.path.join(FLAGS.build_dir, 'Dockerfile')
+            ] + ['-t', 'tritonserver', '.'])
+            p.wait()
+            fail_if(p.returncode != 0, 'docker build tritonserver failed')
 
     except Exception as e:
         logging.error(traceback.format_exc())
@@ -1111,10 +1116,11 @@ if __name__ == '__main__':
                         action="store_true",
                         required=False,
                         help='Do not use Docker container for build.')
-    parser.add_argument('--no-container-pull',
-                        action="store_true",
-                        required=False,
-                        help='Do not use Docker --pull argument when building container.')
+    parser.add_argument(
+        '--no-container-pull',
+        action="store_true",
+        required=False,
+        help='Do not use Docker --pull argument when building container.')
 
     parser.add_argument('--build-id',
                         type=str,
